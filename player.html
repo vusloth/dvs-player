@@ -36,3 +36,95 @@
     log('> ' + type + ' ' + JSON.stringify(data || {}));
   }
   function cur() { try { return player.getCurrentTime() || 0; } catch (e) { return 0; } }
+  function dur() { try { return player.getDuration() || 0; } catch (e) { return 0; } }
+
+  function hello() {
+    send('hello', { origin: location.origin, referrer: document.referrer, framed: window.top !== window, attempt: attempt });
+  }
+
+  function makePlayer(id) {
+    attempt++;
+    currentId = id; ready = false;
+    clearTimeout(readyTimer);
+    if (player) { try { player.destroy(); } catch (e) {} player = null; }
+    document.getElementById('wrap').innerHTML = '<div id="yt"></div>';
+    var host = attempt === 1 ? 'https://www.youtube.com' : 'https://www.youtube-nocookie.com';
+    var vars = { playsinline: 1, rel: 0, controls: 1, enablejsapi: 1 };
+    if (location.origin.indexOf('http') === 0) vars.origin = location.origin;
+    player = new YT.Player('yt', {
+      host: host, width: '100%', height: '100%', videoId: id, playerVars: vars,
+      events: { onReady: onReady, onStateChange: onState, onError: onError, onAutoplayBlocked: function () { send('autoplayBlocked'); } }
+    });
+    readyTimer = setTimeout(function () {
+      if (!ready) { send('error', { code: 'ready-timeout', attempt: attempt }); if (attempt < 2) makePlayer(id); }
+    }, 8000);
+  }
+
+  function onReady() {
+    ready = true; clearTimeout(readyTimer);
+    send('ready', { attempt: attempt, host: attempt === 1 ? 'youtube.com' : 'youtube-nocookie.com' });
+    if (pending) { var p = pending; pending = null; run(p); }
+  }
+
+  function onState(e) {
+    lastState = e.data;
+    send('state', { code: e.data, name: NAMES[String(e.data)] || 'UNKNOWN', t: cur(), d: dur() });
+    if (e.data === 1) {
+      clearTimeout(stallTimer);
+      if (!pollTimer) pollTimer = setInterval(function () { send('time', { t: cur(), d: dur() }); }, 500);
+    } else if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (e.data === 1 || e.data === 5) {
+      try { var v = player.getVideoData(); send('videoData', { id: v.video_id, title: v.title, author: v.author }); } catch (x) {}
+    }
+  }
+
+  function onError(e) {
+    send('error', { code: e.data, attempt: attempt });
+    if (!ready && (e.data === 153 || e.data === 152) && attempt < 2) makePlayer(currentId);
+  }
+
+  function run(d) {
+    if ((d.type === 'load' || d.type === 'cue') && d.id) {
+      if (!player) { pending = d; makePlayer(d.id); return; }
+      if (!ready) { pending = d; return; }
+      if (d.type === 'load') {
+        lastState = -2; clearTimeout(stallTimer);
+        player.loadVideoById(d.id, d.start || 0);
+        stallTimer = setTimeout(function () {
+          if (lastState !== 1 && lastState !== 3) send('stalled', { msg: 'Scripted playback did not start. Tap play in the video.' });
+        }, 4000);
+      } else { player.cueVideoById(d.id, d.start || 0); }
+      currentId = d.id;
+      return;
+    }
+    if (!ready) return;
+    if (d.type === 'play') player.playVideo();
+    else if (d.type === 'pause') player.pauseVideo();
+    else if (d.type === 'seek') { player.seekTo(Number(d.t) || 0, true); send('time', { t: cur(), d: dur() }); }
+    else if (d.type === 'ping') hello();
+  }
+
+  window.addEventListener('message', function (e) {
+    if (e.source !== parent || parent === window) return;
+    var d = e.data;
+    if (!d || d.src !== 'dvs-cmd') return;
+    log('< ' + d.type);
+    run(d);
+  });
+
+  window.onYouTubeIframeAPIReady = function () {
+    send('apiReady');
+    var v = q.get('v');
+    if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) makePlayer(v);
+  };
+  var s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  s.onerror = function () { send('error', { code: 'api-script', msg: "Couldn't load the YouTube player script" }); };
+  document.head.appendChild(s);
+  setTimeout(function () { if (!(window.YT && YT.Player)) send('error', { code: 'api-timeout' }); }, 10000);
+
+  hello();
+})();
+</script>
+</body>
+</html>
