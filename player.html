@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>DVS Player Relay</title>
+<style>
+  :root { --bg:#0f0f14; --fg:#eeeeee; --mut:#9a9aa5; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:12px/1.5 system-ui, sans-serif; }
+  body { display:flex; flex-direction:column; }
+  #wrap { flex:1; min-height:0; background:#000; }
+  #wrap iframe { width:100%; height:100%; border:0; display:block; }
+  #info { margin:0; padding:6px 10px; max-height:35%; overflow:auto; color:var(--mut); white-space:pre-wrap; word-break:break-word; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="yt"></div></div>
+<pre id="info" hidden></pre>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var DEBUG = q.has('debug');
+  var info = document.getElementById('info');
+  if (DEBUG) info.hidden = false;
+  var NAMES = { '-1':'UNSTARTED', '0':'ENDED', '1':'PLAYING', '2':'PAUSED', '3':'BUFFERING', '5':'CUED' };
+  var player = null, ready = false, pending = null, attempt = 0, lastState = -2;
+  var readyTimer = null, pollTimer = null, stallTimer = null, currentId = null;
+
+  function log(s) { if (DEBUG) { info.textContent += s + '\n'; info.scrollTop = info.scrollHeight; } }
+  function send(type, data) {
+    var msg = { src: 'dvs-relay', type: type };
+    for (var k in (data || {})) msg[k] = data[k];
+    try { parent.postMessage(msg, '*'); } catch (e) {}
+    log('> ' + type + ' ' + JSON.stringify(data || {}));
+  }
+  function cur() { try { return player.getCurrentTime() || 0; } catch (e) { return 0; } }
